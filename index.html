@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Solar Monitoring Dashboard</title>
+    <!-- Load Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font family -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .bg-gray-750 {
+            background-color: #3f444c; /* Slightly lighter gray for hover */
+        }
+        .max-h-96 {
+            max-height: 24rem;
+        }
+        /* Custom scrollbar styling for aesthetics */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #374151; /* gray-700 */ border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #6b7280; /* gray-500 */ border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+    </style>
+</head>
+<body class="min-h-screen bg-gray-900 text-gray-100 p-4">
+
+    <!-- Main Container -->
+    <div class="flex flex-col lg:flex-row min-h-[calc(100vh-2rem)]">
+        
+        <!-- Sidebar / Summary (Left Side) -->
+        <aside class="w-full lg:w-1/4 p-4 space-y-6 bg-gray-800 rounded-xl shadow-2xl mb-4 lg:mb-0 lg:mr-4">
+            <h1 class="text-3xl font-extrabold text-indigo-400">Solar Monitor Dashboard</h1>
+            <p class="text-sm text-gray-400">System Status: <span id="connection-status">Connecting...</span></p>
+            
+            <!-- Status and Metrics -->
+            <div class="space-y-4">
+                <h2 class="text-xl font-bold border-b border-gray-700 pb-2">Site Overview</h2>
+                <div id="metrics-container" class="grid grid-cols-2 gap-4">
+                    <!-- Metric cards will be injected here -->
+                </div>
+            </div>
+
+            <!-- Recent Reports (Fetched Data) -->
+            <div class="space-y-4">
+                <h2 class="text-xl font-bold border-b border-gray-700 pb-2 flex justify-between items-center">
+                    Recent Reports
+                </h2>
+                <div id="reports-list-status" class="text-center text-gray-500">Loading reports...</div>
+                <div id="reports-list" class="space-y-3 max-h-96 overflow-y-auto">
+                    <!-- Reports will be injected here by JS -->
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content (Right Side) -->
+        <main class="w-full lg:w-3/4 flex flex-col space-y-4">
+            <!-- Map and Defect Details -->
+            <section class="h-[55vh] bg-gray-800 rounded-xl shadow-2xl p-4 flex flex-col">
+                <h2 class="text-xl font-bold mb-3">Geo-Spatial Defect Map (Node L)</h2>
+                <div id="map-placeholder" class="flex-grow bg-gray-700 rounded-lg flex items-center justify-center text-gray-400 text-sm border border-gray-600">
+                    <div id="selected-report-display" class="text-xl">Select a report to view map data.</div>
+                </div>
+            </section>
+
+            <!-- Charts and Metrics (Bottom Row) -->
+            <section class="grid grid-cols-1 md:grid-cols-2 gap-4 flex-grow">
+                <!-- Trend Chart -->
+                <div class="bg-gray-800 rounded-xl shadow-2xl p-4 flex flex-col">
+                    <h2 class="text-xl font-bold mb-3">Defect Trend Analysis (Node M)</h2>
+                    <div class="flex-grow bg-gray-700 rounded-lg flex items-center justify-center text-gray-400 text-sm border border-gray-600">
+                        [ Placeholder for D3.js/Chart.js - Defect Count Over Last 6 Months ]
+                    </div>
+                </div>
+
+                <!-- Real-Time Status / Detail List -->
+                <div class="bg-gray-800 rounded-xl shadow-2xl p-4 flex flex-col">
+                    <h2 class="text-xl font-bold mb-3">High-Severity Defect List (Node G data)</h2>
+                    <div id="defect-list-placeholder" class="flex-grow space-y-2 max-h-60 overflow-y-auto">
+                        <div class="text-center text-gray-500 mt-4">Defect details will appear here upon report selection.</div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- JavaScript for Data Fetching and UI Logic -->
+    <script>
+        const API_URL = '/api/reports';
+        let REPORTS = [];
+        let SELECTED_REPORT = null;
+        
+        // --- Helper Functions ---
+
+        /** Creates an HTML string for a statistics card. */
+        function createStatCard(icon, label, value, colorClass = 'text-gray-100') {
+            return `
+                <div class="bg-gray-700 p-3 rounded-xl shadow-lg border-b-4 border-indigo-500">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-2xl">${icon}</span>
+                        <div class="flex flex-col">
+                            <span class="text-gray-400 text-xs uppercase">${label}</span>
+                            <span class="text-2xl font-bold ${colorClass}">${value}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        /** Gets the Tailwind class for severity pill styling. */
+        function getSeverityClass(severity) {
+            switch (severity) {
+                case 'High':
+                case 'Critical':
+                    return 'text-red-400 bg-red-900/50 px-2 py-0.5 rounded-full text-xs';
+                case 'Medium':
+                    return 'text-yellow-400 bg-yellow-900/50 px-2 py-0.5 rounded-full text-xs';
+                default:
+                    return 'text-green-400 bg-green-900/50 px-2 py-0.5 rounded-full text-xs';
+            }
+        }
+        
+        /** Formats an ISO date string to a readable format. */
+        function formatDate(isoString) {
+            try {
+                const date = new Date(isoString);
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            } catch (e) {
+                return 'N/A';
+            }
+        }
+
+        // --- Core UI Update Logic ---
+
+        function updateMetrics(reports) {
+            const totalPanels = reports.reduce((sum, r) => sum + r.panelCount, 0);
+            const totalReports = reports.length;
+            const totalDefects = reports.reduce((sum, r) => sum + r.defectCount, 0);
+            
+            const metricsHtml = [
+                createStatCard('☀️', 'Total Panels', totalPanels.toLocaleString()),
+                createStatCard('⚙️', 'Reports Generated', totalReports),
+                createStatCard('🔥', 'Total Defects', totalDefects.toLocaleString()),
+                createStatCard('🟢', 'Inspection Health', '98.5%', 'text-green-400')
+            ].join('');
+
+            document.getElementById('metrics-container').innerHTML = metricsHtml;
+        }
+
+        function renderReportsList(reports) {
+            const listEl = document.getElementById('reports-list');
+            const statusEl = document.getElementById('reports-list-status');
+            listEl.innerHTML = '';
+            
+            if (reports.length === 0) {
+                statusEl.textContent = 'No reports found.';
+                return;
+            }
+
+            statusEl.style.display = 'none';
+
+            reports.forEach(report => {
+                const reportEl = document.createElement('div');
+                reportEl.className = 'p-3 border border-gray-700 rounded-lg cursor-pointer transition duration-150 hover:bg-gray-750';
+                reportEl.dataset.id = report.id;
+                
+                reportEl.innerHTML = `
+                    <div class="font-semibold text-lg flex justify-between items-center">
+                        ${report.siteName} 
+                        <span class="${getSeverityClass(report.severity)}">${report.severity}</span>
+                    </div>
+                    <div class="text-sm text-gray-400">
+                        Defects: ${report.defectCount} | 
+                        Date: ${formatDate(report.date)}
+                    </div>
+                `;
+                
+                reportEl.addEventListener('click', () => selectReport(report.id));
+                listEl.appendChild(reportEl);
+            });
+
+            // Automatically select the first report
+            if (!SELECTED_REPORT && reports.length > 0) {
+                selectReport(reports[0].id);
+            }
+        }
+        
+        function selectReport(reportId) {
+            SELECTED_REPORT = REPORTS.find(r => r.id === reportId);
+            
+            // Highlight selected report
+            document.querySelectorAll('#reports-list > div').forEach(el => {
+                el.classList.remove('border-indigo-500', 'bg-gray-700');
+                el.classList.add('border-gray-700');
+                if (el.dataset.id === reportId) {
+                    el.classList.add('border-indigo-500', 'bg-gray-700');
+                }
+            });
+
+            updateMapAndDefectDetails();
+        }
+
+        function updateMapAndDefectDetails() {
+            const mapEl = document.getElementById('selected-report-display');
+            const defectListEl = document.getElementById('defect-list-placeholder');
+
+            if (!SELECTED_REPORT) {
+                mapEl.innerHTML = '<div class="text-xl">Select a report to view map data.</div>';
+                defectListEl.innerHTML = '<div class="text-center text-gray-500 mt-4">Defect details will appear here upon report selection.</div>';
+                return;
+            }
+
+            // --- Map Placeholder Update ---
+            mapEl.innerHTML = `
+                <div class="text-center p-8">
+                    <p class="text-2xl font-bold text-indigo-400 mb-2">${SELECTED_REPORT.siteName}</p>
+                    <p class="text-gray-300">Total Defects: ${SELECTED_REPORT.defectCount}</p>
+                    <p class="text-sm text-gray-500">Simulating geo-points based on defect count.</p>
+                </div>
+            `;
+            
+            // --- Defect List (Simulated detailed data) ---
+            defectListEl.innerHTML = '';
+            
+            if (SELECTED_REPORT.defectCount === 0) {
+                defectListEl.innerHTML = '<div class="text-center text-gray-500 mt-4">No defects found in this report.</div>';
+            } else {
+                const types = ['Hotspot (High)', 'Wiring Issue (Medium)', 'Dirt Buildup (Low)'];
+                for (let i = 1; i <= Math.min(SELECTED_REPORT.defectCount, 8); i++) {
+                    const defectType = types[i % types.length];
+                    const [type, severity] = defectType.split(' (');
+                    const sev = severity.replace(')', '');
+
+                    const defectEl = document.createElement('div');
+                    defectEl.className = 'bg-gray-700 p-2 rounded-lg flex justify-between items-center text-sm';
+                    defectEl.innerHTML = `
+                        <span>ID: ${i} | Type: ${type}</span>
+                        <span class="${getSeverityClass(sev)}">${sev}</span>
+                    `;
+                    defectListEl.appendChild(defectEl);
+                }
+                if (SELECTED_REPORT.defectCount > 8) {
+                     defectListEl.innerHTML += `<div class="text-center text-gray-500 mt-2 text-xs">... and ${SELECTED_REPORT.defectCount - 8} more defects.</div>`;
+                }
+            }
+        }
+
+        // --- Data Fetching (Simulating RESTful API call - Node I) ---
+
+        async function fetchReports() {
+            document.getElementById('connection-status').textContent = 'Fetching...';
+            try {
+                const response = await fetch(API_URL);
+                if (!response.ok) {
+                    throw new Error(\`HTTP error! Status: \${response.status}\`);
+                }
+                REPORTS = await response.json();
+                
+                // Sort by date descending (latest first)
+                REPORTS.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+                document.getElementById('connection-status').textContent = 'Online';
+                document.getElementById('connection-status').classList.add('text-green-500');
+                
+                updateMetrics(REPORTS);
+                renderReportsList(REPORTS);
+                
+            } catch (error) {
+                console.error("Error fetching reports from Flask API:", error);
+                document.getElementById('connection-status').textContent = 'Error';
+                document.getElementById('reports-list-status').textContent = 'Failed to load reports from API.';
+                document.getElementById('connection-status').classList.remove('text-green-500');
+                document.getElementById('connection-status').classList.add('text-red-500');
+            }
+        }
+
+        // Initialize dashboard on load
+        window.onload = fetchReports;
+
+    </script>
+</body>
+</html>
